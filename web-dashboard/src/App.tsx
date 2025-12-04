@@ -7,7 +7,6 @@ import { PLAN_METADATA, STRIPE_PRICES, type PlanTier } from './billing/plans'
 import { Routes, Route } from 'react-router-dom'
 import { AcceptInvitePage } from './AcceptInvitePage'
 
-
 type ProfileRow = {
   id: string
   user_id: string
@@ -57,6 +56,16 @@ type CalendarRow = {
   created_at: string
 }
 
+type FamilyInviteRow = {
+  id: string
+  family_id: string
+  email: string
+  role: string
+  token: string
+  created_by_profile_id: string | null
+  created_at: string
+}
+
 type DashboardTab = 'family' | 'displays' | 'lists' | 'profile'
 
 // Paid plans we expose in UI
@@ -73,6 +82,14 @@ type FamilyMemberDisplay = {
   full_name: string | null
   role: string
   is_default: boolean
+}
+
+type FamilyInviteDisplay = {
+  id: string
+  email: string
+  invited_by: string
+  created_at: string
+  token: string
 }
 
 function App() {
@@ -97,23 +114,23 @@ function App() {
     }
   }, [])
 
-    if (loading) {
-      return <div style={{ padding: 24 }}>Loading…</div>
-    }
-
-    return (
-      <Routes>
-        {/* Invite acceptance page – available even if not logged in */}
-        <Route path="/invite" element={<AcceptInvitePage />} />
-
-        {/* Everything else: either dashboard (if logged in) or auth page */}
-        <Route
-          path="/*"
-          element={session ? <Dashboard session={session} /> : <AuthPage />}
-        />
-      </Routes>
-    )
+  if (loading) {
+    return <div style={{ padding: 24 }}>Loading…</div>
   }
+
+  return (
+    <Routes>
+      {/* Invite acceptance route – works even if not logged in */}
+      <Route path="/invite" element={<AcceptInvitePage />} />
+
+      {/* Everything else – auth gate: dashboard if logged in, or auth page */}
+      <Route
+        path="/*"
+        element={session ? <Dashboard session={session} /> : <AuthPage />}
+      />
+    </Routes>
+  )
+}
 
 function AuthPage() {
   const [email, setEmail] = useState('')
@@ -215,6 +232,7 @@ function Dashboard({ session }: { session: Session }) {
   const [profileId, setProfileId] = useState<string | null>(null)
   const [isFamilyOwner, setIsFamilyOwner] = useState(false)
   const [familyMembers, setFamilyMembers] = useState<FamilyMemberDisplay[]>([])
+  const [familyInvites, setFamilyInvites] = useState<FamilyInviteDisplay[]>([])
 
   // Plan modal state
   const [showPlanModal, setShowPlanModal] = useState(false)
@@ -228,6 +246,8 @@ function Dashboard({ session }: { session: Session }) {
   const [inviteBusy, setInviteBusy] = useState(false)
   const [inviteError, setInviteError] = useState<string | null>(null)
   const [inviteLink, setInviteLink] = useState<string | null>(null)
+  const [inviteRevokeBusyId, setInviteRevokeBusyId] = useState<string | null>(null)
+  const [copiedInviteId, setCopiedInviteId] = useState<string | null>(null)
 
   // Map from (plan, interval) -> Stripe price key
   const PRICE_KEY_BY_PLAN: Record<PaidPlanTier, Record<BillingInterval, PriceKey>> = {
@@ -375,7 +395,8 @@ function Dashboard({ session }: { session: Session }) {
 
         setCalendars(finalCalendars)
 
-        // 4) Load family members (then fetch profile names separately)
+        // 4) Load family members and pending invites, then fetch profiles to resolve names
+
         const { data: membersRaw, error: membersErr } = await supabase
           .from('family_members')
           .select('*')
@@ -385,19 +406,35 @@ function Dashboard({ session }: { session: Session }) {
 
         const members = (membersRaw ?? []) as FamilyMemberRow[]
 
-        // Collect unique profile IDs
-        const profileIds = Array.from(new Set(members.map((m) => m.profile_id)))
+        const { data: invitesRaw, error: invitesErr } = await supabase
+          .from('family_invites')
+          .select('*')
+          .eq('family_id', activeFamily.id)
+
+        if (invitesErr) throw invitesErr
+
+        const inviteRows = (invitesRaw ?? []) as FamilyInviteRow[]
+
+        // Collect unique profile IDs we need names for
+        const profileIdSet = new Set<string>()
+        members.forEach((m) => {
+          profileIdSet.add(m.profile_id)
+        })
+        inviteRows.forEach((i) => {
+          if (i.created_by_profile_id) profileIdSet.add(i.created_by_profile_id)
+        })
 
         const profilesById = new Map<string, ProfileRow>()
 
-        if (profileIds.length > 0) {
+        if (profileIdSet.size > 0) {
           const { data: profilesRaw, error: profilesErr } = await supabase
             .from('profiles')
             .select('*')
-            .in('id', profileIds)
+            .in('id', Array.from(profileIdSet))
 
           if (profilesErr) throw profilesErr
 
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           ;(profilesRaw ?? []).forEach((p: any) => {
             profilesById.set(p.id as string, {
               id: p.id as string,
@@ -421,6 +458,25 @@ function Dashboard({ session }: { session: Session }) {
 
         setFamilyMembers(membersDisplay)
 
+        const invitesDisplay: FamilyInviteDisplay[] = inviteRows.map((inv) => {
+          const inviterProfile = inv.created_by_profile_id
+            ? profilesById.get(inv.created_by_profile_id)
+            : undefined
+          let invitedBy = inviterProfile?.full_name ?? 'Unknown'
+          if (inv.created_by_profile_id === localProfileId) {
+            invitedBy = 'You'
+          }
+
+          return {
+            id: inv.id,
+            email: inv.email,
+            invited_by: invitedBy,
+            created_at: inv.created_at,
+            token: inv.token,
+          }
+        })
+
+        setFamilyInvites(invitesDisplay)
       } catch (err: unknown) {
         console.error('Bootstrap error:', err)
         let message = 'Something went wrong while loading your family calendar.'
@@ -475,6 +531,18 @@ function Dashboard({ session }: { session: Session }) {
       month: 'short',
       day: 'numeric',
       year: 'numeric',
+    })
+  }
+
+  const formatShortDateTime = (iso: string) => {
+    const d = new Date(iso)
+    if (Number.isNaN(d.getTime())) return '—'
+    return d.toLocaleString(undefined, {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
     })
   }
 
@@ -554,15 +622,33 @@ function Dashboard({ session }: { session: Session }) {
           role: 'member',
           created_by_profile_id: profileId,
         })
-        .select('token')
+        .select('id,email,role,token,created_by_profile_id,created_at')
         .single()
 
       if (error) throw error
 
-      const token = (data as { token: string }).token
+      const invite = data as FamilyInviteRow
+
       const origin = window.location.origin
-      const url = `${origin}/invite?token=${encodeURIComponent(token)}`
+      const url = `${origin}/invite?token=${encodeURIComponent(invite.token)}`
       setInviteLink(url)
+
+      // Update local pending invites list
+      const invitedBy =
+        invite.created_by_profile_id && invite.created_by_profile_id === profileId
+          ? 'You'
+          : 'Unknown'
+
+      const displayInvite: FamilyInviteDisplay = {
+        id: invite.id,
+        email: invite.email,
+        invited_by: invitedBy,
+        created_at: invite.created_at,
+        token: invite.token,
+      }
+
+      setFamilyInvites((prev) => [...prev, displayInvite])
+      setInviteEmail('')
     } catch (err: unknown) {
       console.error('Invite error', err)
       let message = 'Could not generate invite link.'
@@ -577,6 +663,49 @@ function Dashboard({ session }: { session: Session }) {
       setInviteError(message)
     } finally {
       setInviteBusy(false)
+    }
+  }
+
+  const handleCopyInviteLink = async (invite: FamilyInviteDisplay) => {
+    const origin = window.location.origin
+    const url = `${origin}/invite?token=${encodeURIComponent(invite.token)}`
+    try {
+      await navigator.clipboard.writeText(url)
+      setCopiedInviteId(invite.id)
+      window.setTimeout(() => {
+        setCopiedInviteId((current) => (current === invite.id ? null : current))
+      }, 2000)
+    } catch (err) {
+      console.error('Copy invite link error', err)
+      setInviteError('Could not copy invite link to clipboard.')
+    }
+  }
+
+  const handleRevokeInvite = async (inviteId: string) => {
+    setInviteRevokeBusyId(inviteId)
+    setInviteError(null)
+    try {
+      const { error } = await supabase
+        .from('family_invites')
+        .delete()
+        .eq('id', inviteId)
+
+      if (error) throw error
+      setFamilyInvites((prev) => prev.filter((i) => i.id !== inviteId))
+    } catch (err: unknown) {
+      console.error('Revoke invite error', err)
+      let message = 'Could not revoke invite.'
+      if (
+        err &&
+        typeof err === 'object' &&
+        'message' in err &&
+        typeof (err as { message: unknown }).message === 'string'
+      ) {
+        message = (err as { message: string }).message
+      }
+      setInviteError(message)
+    } finally {
+      setInviteRevokeBusyId(null)
     }
   }
 
@@ -789,6 +918,73 @@ function Dashboard({ session }: { session: Session }) {
                   />
                 </div>
               )}
+
+              {/* Pending invites */}
+              <div style={{ marginTop: 20 }}>
+                <h4 style={{ marginTop: 0, marginBottom: 8, fontSize: 15 }}>Pending invites</h4>
+                {familyInvites.length === 0 ? (
+                  <p style={{ fontSize: 14, color: '#999' }}>
+                    No pending invites. Generate an invite to add someone to your family.
+                  </p>
+                ) : (
+                  <ul style={{ listStyle: 'none', paddingLeft: 0 }}>
+                    {familyInvites.map((inv) => (
+                      <li
+                        key={inv.id}
+                        style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          padding: '8px 0',
+                          borderBottom: '1px solid #222',
+                        }}
+                      >
+                        <div>
+                          <div style={{ fontSize: 14 }}>
+                            <strong>{inv.email}</strong>
+                          </div>
+                          <div style={{ fontSize: 12, color: '#aaa' }}>
+                            Invited by {inv.invited_by} · Sent {formatShortDateTime(inv.created_at)}
+                          </div>
+                        </div>
+                        <div style={{ display: 'flex', gap: 8 }}>
+                          <button
+                            type="button"
+                            onClick={() => void handleCopyInviteLink(inv)}
+                            style={{
+                              padding: '4px 8px',
+                              borderRadius: 4,
+                              border: '1px solid #444',
+                              backgroundColor: '#1a1a1a',
+                              color: '#fff',
+                              fontSize: 12,
+                              cursor: 'pointer',
+                            }}
+                          >
+                            {copiedInviteId === inv.id ? 'Copied!' : 'Copy link'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void handleRevokeInvite(inv.id)}
+                            disabled={inviteRevokeBusyId === inv.id}
+                            style={{
+                              padding: '4px 8px',
+                              borderRadius: 4,
+                              border: '1px solid #b91c1c',
+                              backgroundColor: '#7f1d1d',
+                              color: '#fff',
+                              fontSize: 12,
+                              cursor: inviteRevokeBusyId === inv.id ? 'default' : 'pointer',
+                            }}
+                          >
+                            {inviteRevokeBusyId === inv.id ? 'Revoking…' : 'Revoke'}
+                          </button>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
             </div>
           )}
         </section>
