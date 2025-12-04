@@ -4,6 +4,9 @@ import type { Session } from '@supabase/supabase-js'
 import { supabase } from './lib/supabase'
 import './dashboard.css'
 import { PLAN_METADATA, STRIPE_PRICES, type PlanTier } from './billing/plans'
+import { Routes, Route } from 'react-router-dom'
+import { AcceptInvitePage } from './AcceptInvitePage'
+
 
 type ProfileRow = {
   id: string
@@ -94,16 +97,23 @@ function App() {
     }
   }, [])
 
-  if (loading) {
-    return <div style={{ padding: 24 }}>Loading…</div>
-  }
+    if (loading) {
+      return <div style={{ padding: 24 }}>Loading…</div>
+    }
 
-  if (!session) {
-    return <AuthPage />
-  }
+    return (
+      <Routes>
+        {/* Invite acceptance page – available even if not logged in */}
+        <Route path="/invite" element={<AcceptInvitePage />} />
 
-  return <Dashboard session={session} />
-}
+        {/* Everything else: either dashboard (if logged in) or auth page */}
+        <Route
+          path="/*"
+          element={session ? <Dashboard session={session} /> : <AuthPage />}
+        />
+      </Routes>
+    )
+  }
 
 function AuthPage() {
   const [email, setEmail] = useState('')
@@ -551,7 +561,7 @@ function Dashboard({ session }: { session: Session }) {
 
       const token = (data as { token: string }).token
       const origin = window.location.origin
-      const url = `${origin}/?invite=${encodeURIComponent(token)}`
+      const url = `${origin}/invite?token=${encodeURIComponent(token)}`
       setInviteLink(url)
     } catch (err: unknown) {
       console.error('Invite error', err)
