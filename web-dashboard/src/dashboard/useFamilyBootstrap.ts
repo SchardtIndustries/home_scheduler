@@ -11,6 +11,7 @@ import type {
   FamilyMemberRow,
   FamilyRow,
   ProfileRow,
+  UserFamilySummary,
 } from './types'
 import type { PlanTier } from '../billing/plans'
 
@@ -21,13 +22,20 @@ interface UseFamilyBootstrapResult {
   calendars: CalendarRow[]
   profileName: string | null
   profileId: string | null
+  profileAvatarUrl: string | null
   isFamilyOwner: boolean
   familyMembers: FamilyMemberDisplay[]
   familyInvites: FamilyInviteDisplay[]
+  userFamilies: UserFamilySummary[]
   setFamilyInvites: React.Dispatch<React.SetStateAction<FamilyInviteDisplay[]>>
+  setProfileAvatarUrl: React.Dispatch<React.SetStateAction<string | null>>
+  setUserFamilies: React.Dispatch<React.SetStateAction<UserFamilySummary[]>>
 }
 
-export function useFamilyBootstrap(session: Session): UseFamilyBootstrapResult {
+export function useFamilyBootstrap(
+  session: Session,
+  activeFamilyId: string | null
+): UseFamilyBootstrapResult {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -35,9 +43,11 @@ export function useFamilyBootstrap(session: Session): UseFamilyBootstrapResult {
   const [calendars, setCalendars] = useState<CalendarRow[]>([])
   const [profileName, setProfileName] = useState<string | null>(null)
   const [profileId, setProfileId] = useState<string | null>(null)
+  const [profileAvatarUrl, setProfileAvatarUrl] = useState<string | null>(null)
   const [isFamilyOwner, setIsFamilyOwner] = useState(false)
   const [familyMembers, setFamilyMembers] = useState<FamilyMemberDisplay[]>([])
   const [familyInvites, setFamilyInvites] = useState<FamilyInviteDisplay[]>([])
+  const [userFamilies, setUserFamilies] = useState<UserFamilySummary[]>([])
 
   useEffect(() => {
     const bootstrap = async () => {
@@ -48,11 +58,12 @@ export function useFamilyBootstrap(session: Session): UseFamilyBootstrapResult {
         const user = session.user
 
         // 1) Ensure profile exists
-        const { data: existingProfileRaw, error: profileSelectError } = await supabase
-          .from('profiles')
-          .select('*')
-          .eq('user_id', user.id)
-          .maybeSingle()
+        const { data: existingProfileRaw, error: profileSelectError } =
+          await supabase
+            .from('profiles')
+            .select('*')
+            .eq('user_id', user.id)
+            .maybeSingle()
 
         if (profileSelectError) throw profileSelectError
 
@@ -72,9 +83,11 @@ export function useFamilyBootstrap(session: Session): UseFamilyBootstrapResult {
           const newProfile = newProfileRaw as ProfileRow
           localProfileId = newProfile.id
           setProfileName(newProfile.full_name)
+          setProfileAvatarUrl(newProfile.avatar_url ?? null)
         } else {
           localProfileId = existingProfile.id
           setProfileName(existingProfile.full_name)
+          setProfileAvatarUrl(existingProfile.avatar_url ?? null)
         }
 
         setProfileId(localProfileId)
@@ -117,19 +130,55 @@ export function useFamilyBootstrap(session: Session): UseFamilyBootstrapResult {
 
           activeFamilyRow = newFamily
           isOwner = true
-        } else {
-          const defaultMembership = memberships.find((m) => m.is_default) ?? memberships[0]
-          isOwner = defaultMembership.role === 'owner'
 
-          const { data: famRaw, error: famSelErr } = await supabase
+          // userFamilies list (single family)
+          setUserFamilies([
+            {
+              id: newFamily.id,
+              name: newFamily.name,
+              role: 'owner',
+              is_default: true,
+            },
+          ])
+        } else {
+          // Load all families the user belongs to
+          const familyIds = memberships.map((m) => m.family_id)
+          const { data: famsRaw, error: famsErr } = await supabase
             .from('families')
             .select('*')
-            .eq('id', defaultMembership.family_id)
-            .single()
+            .in('id', familyIds)
 
-          if (famSelErr) throw famSelErr
+          if (famsErr) throw famsErr
 
-          activeFamilyRow = famRaw as FamilyRow
+          const fams = (famsRaw ?? []) as FamilyRow[]
+          const famMap = new Map<string, FamilyRow>()
+          fams.forEach((f) => famMap.set(f.id, f))
+
+          // Select active membership:
+          const selectedMembership =
+            (activeFamilyId &&
+              memberships.find((m) => m.family_id === activeFamilyId)) ||
+            memberships.find((m) => m.is_default) ||
+            memberships[0]
+
+          activeFamilyRow = famMap.get(selectedMembership.family_id) as FamilyRow
+          isOwner = selectedMembership.role === 'owner'
+
+          // Build userFamilies summary
+          const familiesSummary: UserFamilySummary[] = memberships
+            .map((m) => {
+              const fam = famMap.get(m.family_id)
+              if (!fam) return null
+              return {
+                id: fam.id,
+                name: fam.name,
+                role: m.role,
+                is_default: m.is_default,
+              }
+            })
+            .filter((f): f is UserFamilySummary => f !== null)
+
+          setUserFamilies(familiesSummary)
         }
 
         const activeFamily: Family = {
@@ -137,7 +186,8 @@ export function useFamilyBootstrap(session: Session): UseFamilyBootstrapResult {
           name: activeFamilyRow.name,
           plan_tier: (activeFamilyRow.plan_tier as PlanTier) ?? 'free',
           billing_status: activeFamilyRow.billing_status ?? null,
-          current_period_end: (activeFamilyRow.current_period_end as string | null) ?? null,
+          current_period_end:
+            (activeFamilyRow.current_period_end as string | null) ?? null,
         }
 
         setFamily(activeFamily)
@@ -173,7 +223,7 @@ export function useFamilyBootstrap(session: Session): UseFamilyBootstrapResult {
 
         setCalendars(finalCalendars)
 
-        // 4) Load family members and pending invites, then fetch profiles to resolve names
+        // 4) Load family members & invites for this active family
         const { data: membersRaw, error: membersErr } = await supabase
           .from('family_members')
           .select('*')
@@ -192,11 +242,9 @@ export function useFamilyBootstrap(session: Session): UseFamilyBootstrapResult {
 
         const inviteRows = (invitesRaw ?? []) as FamilyInviteRow[]
 
-        // Collect unique profile IDs we need names for
+        // Collect unique profile IDs
         const profileIdSet = new Set<string>()
-        members.forEach((m) => {
-          profileIdSet.add(m.profile_id)
-        })
+        members.forEach((m) => profileIdSet.add(m.profile_id))
         inviteRows.forEach((i) => {
           if (i.created_by_profile_id) profileIdSet.add(i.created_by_profile_id)
         })
@@ -217,6 +265,7 @@ export function useFamilyBootstrap(session: Session): UseFamilyBootstrapResult {
               id: p.id as string,
               user_id: p.user_id as string,
               full_name: (p.full_name as string | null) ?? null,
+              avatar_url: (p.avatar_url as string | null) ?? null,
               created_at: p.created_at as string,
             })
           })
@@ -228,6 +277,7 @@ export function useFamilyBootstrap(session: Session): UseFamilyBootstrapResult {
             id: m.id,
             profile_id: m.profile_id,
             full_name: prof?.full_name ?? null,
+            avatar_url: prof?.avatar_url ?? null,
             role: m.role,
             is_default: m.is_default,
           }
@@ -272,7 +322,7 @@ export function useFamilyBootstrap(session: Session): UseFamilyBootstrapResult {
     }
 
     void bootstrap()
-  }, [session])
+  }, [session, activeFamilyId])
 
   return {
     loading,
@@ -281,9 +331,13 @@ export function useFamilyBootstrap(session: Session): UseFamilyBootstrapResult {
     calendars,
     profileName,
     profileId,
+    profileAvatarUrl,
     isFamilyOwner,
     familyMembers,
     familyInvites,
+    userFamilies,
     setFamilyInvites,
+    setProfileAvatarUrl,
+    setUserFamilies,
   }
 }

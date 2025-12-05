@@ -2,8 +2,8 @@
 import React from 'react'
 import type {
   CalendarRow,
-  FamilyInviteDisplay,
   FamilyMemberDisplay,
+  FamilyInviteDisplay,
 } from './types'
 
 interface FamilyTabProps {
@@ -24,14 +24,26 @@ interface FamilyTabProps {
   inviteLink: string | null
   onInviteEmailChange: (value: string) => void
   onGenerateInvite: (e: React.FormEvent) => void
+
   familyInvites: FamilyInviteDisplay[]
   onCopyInviteLink: (invite: FamilyInviteDisplay) => void
-  onRevokeInvite: (id: string) => void
+  onRevokeInvite: (inviteId: string) => void
   copiedInviteId: string | null
   inviteRevokeBusyId: string | null
 
   calendars: CalendarRow[]
   formatShortDateTime: (iso: string) => string
+}
+
+function getInitials(name: string | null): string {
+  if (!name) return '?'
+  const initials = name
+    .trim()
+    .split(/\s+/)
+    .map((part) => part[0]?.toUpperCase() ?? '')
+    .join('')
+    .slice(0, 2)
+  return initials || '?'
 }
 
 export const FamilyTab: React.FC<FamilyTabProps> = ({
@@ -108,8 +120,8 @@ export const FamilyTab: React.FC<FamilyTabProps> = ({
                   color: '#aaa',
                 }}
               >
-                You can upgrade or downgrade your plan at any time. Changes are handled securely by
-                Stripe.
+                You can upgrade or downgrade your plan at any time. Changes are
+                handled securely by Stripe.
               </p>
               <button
                 type="button"
@@ -139,7 +151,7 @@ export const FamilyTab: React.FC<FamilyTabProps> = ({
       <section style={{ marginBottom: 32 }}>
         <h2>Family members</h2>
 
-        <ul style={{ marginBottom: 16 }}>
+        <ul style={{ marginBottom: 16, listStyle: 'none', paddingLeft: 0 }}>
           {familyMembers.map((m) => {
             const name = m.full_name || '(Unnamed member)'
             const isYou = profileId === m.profile_id
@@ -148,13 +160,64 @@ export const FamilyTab: React.FC<FamilyTabProps> = ({
                 ? 'Admin'
                 : m.role.charAt(0).toUpperCase() + m.role.slice(1)
 
+            const initials = getInitials(m.full_name)
+
             return (
-              <li key={m.id} style={{ marginBottom: 4 }}>
-                <strong>{name}</strong>
-                {isYou && ' (You)'}
-                {' — '}
-                <span style={{ color: '#bbb' }}>{roleLabel}</span>
-                {m.is_default && <span style={{ color: '#60a5fa' }}> · default</span>}
+              <li
+                key={m.id}
+                style={{
+                  marginBottom: 8,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 12,
+                }}
+              >
+                {/* Avatar instead of dot */}
+                <div
+                  style={{
+                    width: 32,
+                    height: 32,
+                    borderRadius: '50%',
+                    border: '1px solid #444',
+                    backgroundColor: '#1f2937',
+                    overflow: 'hidden',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontSize: 14,
+                    fontWeight: 600,
+                    color: '#e5e7eb',
+                    flexShrink: 0,
+                  }}
+                >
+                  {m.avatar_url ? (
+                    <img
+                      src={m.avatar_url}
+                      alt={name}
+                      style={{
+                        width: '100%',
+                        height: '100%',
+                        objectFit: 'cover',
+                        display: 'block',
+                      }}
+                    />
+                  ) : (
+                    initials
+                  )}
+                </div>
+
+                <div>
+                  <div style={{ fontWeight: 500 }}>
+                    {name}
+                    {isYou && ' (You)'}
+                    {m.is_default && (
+                      <span style={{ color: '#60a5fa', marginLeft: 4 }}>
+                        · default
+                      </span>
+                    )}
+                  </div>
+                  <div style={{ fontSize: 13, color: '#bbb' }}>{roleLabel}</div>
+                </div>
               </li>
             )
           })}
@@ -163,6 +226,7 @@ export const FamilyTab: React.FC<FamilyTabProps> = ({
           )}
         </ul>
 
+        {/* Invite box (unchanged, just reused) */}
         {isFamilyOwner && (
           <div
             style={{
@@ -173,9 +237,19 @@ export const FamilyTab: React.FC<FamilyTabProps> = ({
               backgroundColor: '#181818',
             }}
           >
-            <h3 style={{ marginTop: 0, marginBottom: 8, fontSize: 16 }}>Add member</h3>
-            <p style={{ marginTop: 0, marginBottom: 12, fontSize: 14, color: '#bbb' }}>
-              Enter an email to generate an invite link you can paste into a text or email.
+            <h3 style={{ marginTop: 0, marginBottom: 8, fontSize: 16 }}>
+              Add member
+            </h3>
+            <p
+              style={{
+                marginTop: 0,
+                marginBottom: 12,
+                fontSize: 14,
+                color: '#bbb',
+              }}
+            >
+              Enter an email to generate an invite link you can paste into a
+              text or email.
             </p>
 
             <form onSubmit={onGenerateInvite}>
@@ -198,7 +272,13 @@ export const FamilyTab: React.FC<FamilyTabProps> = ({
               </div>
 
               {inviteError && (
-                <div style={{ color: '#f87171', marginBottom: 8, fontSize: 14 }}>
+                <div
+                  style={{
+                    color: '#f87171',
+                    marginBottom: 8,
+                    fontSize: 14,
+                  }}
+                >
                   {inviteError}
                 </div>
               )}
@@ -222,7 +302,13 @@ export const FamilyTab: React.FC<FamilyTabProps> = ({
 
             {inviteLink && (
               <div style={{ marginTop: 12 }}>
-                <p style={{ marginBottom: 4, fontSize: 14, color: '#bbb' }}>
+                <p
+                  style={{
+                    marginBottom: 4,
+                    fontSize: 14,
+                    color: '#bbb',
+                  }}
+                >
                   Share this link with your family member:
                 </p>
                 <input
@@ -245,10 +331,13 @@ export const FamilyTab: React.FC<FamilyTabProps> = ({
 
             {/* Pending invites */}
             <div style={{ marginTop: 20 }}>
-              <h4 style={{ marginTop: 0, marginBottom: 8, fontSize: 15 }}>Pending invites</h4>
+              <h4 style={{ marginTop: 0, marginBottom: 8, fontSize: 15 }}>
+                Pending invites
+              </h4>
               {familyInvites.length === 0 ? (
                 <p style={{ fontSize: 14, color: '#999' }}>
-                  No pending invites. Generate an invite to add someone to your family.
+                  No pending invites. Generate an invite to add someone to your
+                  family.
                 </p>
               ) : (
                 <ul style={{ listStyle: 'none', paddingLeft: 0 }}>
@@ -267,7 +356,12 @@ export const FamilyTab: React.FC<FamilyTabProps> = ({
                         <div style={{ fontSize: 14 }}>
                           <strong>{inv.email}</strong>
                         </div>
-                        <div style={{ fontSize: 12, color: '#aaa' }}>
+                        <div
+                          style={{
+                            fontSize: 12,
+                            color: '#aaa',
+                          }}
+                        >
                           Invited by {inv.invited_by} · Sent{' '}
                           {formatShortDateTime(inv.created_at)}
                         </div>
@@ -300,10 +394,14 @@ export const FamilyTab: React.FC<FamilyTabProps> = ({
                             color: '#fff',
                             fontSize: 12,
                             cursor:
-                              inviteRevokeBusyId === inv.id ? 'default' : 'pointer',
+                              inviteRevokeBusyId === inv.id
+                                ? 'default'
+                                : 'pointer',
                           }}
                         >
-                          {inviteRevokeBusyId === inv.id ? 'Revoking…' : 'Revoke'}
+                          {inviteRevokeBusyId === inv.id
+                            ? 'Revoking…'
+                            : 'Revoke'}
                         </button>
                       </div>
                     </li>
@@ -315,11 +413,11 @@ export const FamilyTab: React.FC<FamilyTabProps> = ({
         )}
       </section>
 
-      {/* Calendars section */}
+      {/* Calendars section (unchanged) */}
       <section style={{ marginBottom: 24 }}>
         <h2>Calendars</h2>
         <p style={{ color: '#bbb' }}>
-          All Calenders shared by your family members will be displayed here.
+          All calendars shared by your family members will be displayed here.
         </p>
 
         <ul>
