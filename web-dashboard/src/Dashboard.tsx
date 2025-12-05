@@ -1,5 +1,5 @@
 // src/Dashboard.tsx
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import { supabase } from './lib/supabase'
 import './dashboard.css'
@@ -23,7 +23,13 @@ import {
 import { DashboardHeader } from './dashboard/DashboardHeader'
 
 export function Dashboard({ session }: { session: Session }) {
-  // Family bootstrap hook (profiles, family, calendars, members, invites)
+  const [activeTab, setActiveTab] = useState<DashboardTab>('family')
+  const [profileEmail] = useState<string | null>(session.user.email ?? null)
+
+  // Which family is currently selected in the UI
+  const [activeFamilyId, setActiveFamilyId] = useState<string | null>(null)
+
+  // Family bootstrap hook (profiles, family, calendars, members, invites, avatar, families list)
   const {
     loading,
     error,
@@ -31,14 +37,21 @@ export function Dashboard({ session }: { session: Session }) {
     calendars,
     profileName,
     profileId,
+    profileAvatarUrl,
     isFamilyOwner,
     familyMembers,
     familyInvites,
+    userFamilies,
     setFamilyInvites,
-  } = useFamilyBootstrap(session)
+    setProfileAvatarUrl,
+  } = useFamilyBootstrap(session, activeFamilyId)
 
-  const [activeTab, setActiveTab] = useState<DashboardTab>('family')
-  const [profileEmail] = useState<string | null>(session.user.email ?? null)
+  // Once we know the initial family, set activeFamilyId (first load only)
+  useEffect(() => {
+    if (family && !activeFamilyId) {
+      setActiveFamilyId(family.id)
+    }
+  }, [family, activeFamilyId])
 
   // Billing hook
   const {
@@ -91,6 +104,63 @@ export function Dashboard({ session }: { session: Session }) {
     .map((part) => part[0]?.toUpperCase() ?? '')
     .join('')
     .slice(0, 2)
+
+  // Upload avatar (cropped File) to Supabase storage and update profiles.avatar_url.
+  const handleUploadAvatar = async (file: File) => {
+    if (!profileId) return
+
+    const AVATAR_BUCKET = 'avatars'
+
+    try {
+      const ext = file.name.split('.').pop() ?? 'jpg'
+      const filePath = `${profileId}/avatar.${ext}`
+
+      const { error: uploadErr } = await supabase.storage
+        .from(AVATAR_BUCKET)
+        .upload(filePath, file, { upsert: true })
+
+      if (uploadErr) throw uploadErr
+
+      const { data } = supabase.storage.from(AVATAR_BUCKET).getPublicUrl(filePath)
+
+      // Cache-buster so browser sees the new cropped image immediately
+      const publicUrl = `${data.publicUrl}?v=${Date.now()}`
+
+      const { error: updateErr } = await supabase
+        .from('profiles')
+        .update({ avatar_url: publicUrl })
+        .eq('id', profileId)
+
+      if (updateErr) throw updateErr
+
+      setProfileAvatarUrl(publicUrl)
+    } catch (err) {
+      console.error('Error uploading avatar', err)
+      throw err
+    }
+  }
+
+  // Clear avatar in DB and local state
+  const handleClearAvatar = async () => {
+    if (!profileId) return
+    try {
+      const { error } = await supabase
+        .from('profiles')
+        .update({ avatar_url: null })
+        .eq('id', profileId)
+
+      if (error) throw error
+      setProfileAvatarUrl(null)
+    } catch (err) {
+      console.error('Error clearing avatar', err)
+      throw err
+    }
+  }
+
+  // Placeholder for creating a new family
+  const handleCreateFamily = async () => {
+    alert('Create new family flow not implemented yet.')
+  }
 
   if (loading) {
     return <div style={{ padding: 24 }}>Loading your family…</div>
@@ -198,7 +268,18 @@ export function Dashboard({ session }: { session: Session }) {
           />
         )
       case 'profile':
-        return <ProfileTab profileName={profileName} profileEmail={profileEmail} />
+        return (
+          <ProfileTab
+            profileName={profileName}
+            profileEmail={profileEmail}
+            profileAvatarUrl={profileAvatarUrl}
+            initials={initials}
+            families={userFamilies}
+            onUploadAvatar={handleUploadAvatar}
+            onClearAvatar={handleClearAvatar}
+            onCreateFamily={handleCreateFamily}
+          />
+        )
       default:
         return null
     }
@@ -217,9 +298,13 @@ export function Dashboard({ session }: { session: Session }) {
     >
       <DashboardHeader
         familyName={family.name}
+        families={userFamilies}
+        currentFamilyId={family.id}
+        onSelectFamily={(id) => setActiveFamilyId(id)}
         activeTab={activeTab}
         onChangeTab={setActiveTab}
         initials={initials}
+        profileImageUrl={profileAvatarUrl}
         onLogout={handleLogout}
       />
 

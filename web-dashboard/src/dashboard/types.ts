@@ -33,6 +33,14 @@ export type ProfileRow = {
   user_id: string
   full_name: string | null
   created_at: string
+  avatar_url?: string | null 
+}
+
+export type UserFamilySummary = {
+  id: string
+  name: string
+  role: string
+  is_default: boolean
 }
 
 export type FamilyRow = {
@@ -100,6 +108,7 @@ export type FamilyMemberDisplay = {
   profile_id: string
   full_name: string | null
   role: string
+  avatar_url: string | null  
   is_default: boolean
 }
 
